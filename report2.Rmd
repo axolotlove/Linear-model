@@ -1,0 +1,88 @@
+---
+title: "Report2 - Linear models"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(data.table)
+library(ISLR)
+library(MASS)
+library(EnvStats)
+library(car)
+```
+
+## Data preparation
+
+In this report we will use data from study which analyses property cost in relation to different factors in Boston. First of all predictors have to be separated into two categories: continuous and discrete. As shown the dataset's structure, we can see 2 categories with discrete values: rad and chas. Thus, those two were converted into factors.
+
+```{r}
+str(Boston)
+Boston$chas <- as.factor(Boston$chas)
+Boston$rad <- as.factor(Boston$rad)
+```
+
+Because our data was measured in different scales, we need to standaridize countinuous predictors to compare their influence in future model. 
+
+```{r}
+Boston[, c(1, 2, 3, 5, 6, 7, 8, 10, 11, 12, 13)] <- as.data.frame(sapply(Boston[, c(1, 2, 3, 5, 6, 7, 8, 10, 11, 12, 13)], scale))
+```
+
+## Making linear model
+
+Multiple linear regression analysis was used to develop a model for predicting property's average cost in Boston (medv) from per capita crime rate by town (crim), proportion of residential land zoned for lots (zn), proportion of non-retail business acres per town (indus), Charles River presence (chas), nitric oxides concentration (nox), average number of rooms per dwelling (rm), proportion of owner-occupied units built (age), weighted distances to five Boston employment centres (dis), index of accessibility to radial highways (rad), full-value property-tax rate per USD 10,000 (tax), pupil-teacher ratio by town (ptratio) and percentage of lower status of the population (lstat). Full model didn't consider predictor's interactions, but rather sum of their influnces.
+
+```{r}
+mod_scale <- lm(medv ~ ., data = Boston)
+summary(mod_scale)
+```
+
+Basic descriptive statistics and regression coefficients are shown in the table above. Intercept demonstrates us medv value when all continuos predictors are equal zero and both descrete predictors exhibit their first categories, namely chas0 and rad1. Coefficients of continuous predictors show how medv will change if predictor's value will increase by one. Coefficients of discrete predictors show how medv will change if predictor will move to another categorie. Of all predictors insignificant (p < 0.05) are indus, age, rad2 and rad6. All those predictors were able to account for 73.96 % of the variance in medv, SD = 4.694 on 485 degrees of freedom, F = 72.7, p < 0.001.
+
+## Diagnosing model
+
+Before using full model we need to check it for applicability conditions. For that reason first of all residual graph was built.
+
+```{r}
+mod_diag <- data.frame(fortify(mod_scale), Boston)
+gg_resid <- ggplot(data = mod_diag, aes(x = .fitted, y = .stdresid)) + 
+  geom_point() + 
+  geom_hline(yintercept = 0) +
+  geom_smooth(method = "lm") +
+  geom_hline(yintercept = 2, color = "red") +
+  geom_hline(yintercept = -2, color = "red")
+gg_resid
+```
+
+Residuals of medv values are lined up in slight curvative, though they can be attributed to linear dependence of medv from predictors. Moreover, residuals are scattered evenly in the 2 sigma area, thus implying constant dispersion. However, we can see significant number of outliers, which are not supported by full model. 
+
+```{r}
+qqPlot(mod_diag$.fitted)
+```
+
+As qqPlot shows, residuals have a normal distribution, which is another condition for linear model. 
+
+```{r}
+ggplot(mod_diag, aes(x = 1:nrow(mod_diag), y = .cooksd)) + 
+  geom_bar(stat = "identity") + 
+  geom_hline(yintercept = 2, color = "red")
+```
+
+Cook's plot describe influential values distribution. No values exeed a intercept's limit of 2.
+
+```{r}
+res_dwt <- dwt(mod_diag$.fitted)
+res_dwt
+```
+
+Finally to test our model for autocorrelations, Durbin-Watson test was performed with output value 0.05025616, which means a tendency to autocorrelation
+
+## Summary
+
+To sum up, this model needs considerable optimisation espetially in the amount of predictors: not only full model contains insignificant predictors, but additional check for multicollinearity is required. Values itself tend to have dependencies between each other, but it's not critical. Otherwise, this model is viable, since it has linear pattern, no heterocedastity and no influential values. 
