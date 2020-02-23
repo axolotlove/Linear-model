@@ -1,0 +1,483 @@
+---
+title: "Trisomy"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Описание датасета
+
+```{r, include=FALSE}
+library(readxl)
+library(ggplot2)
+library(dplyr)
+library(car)
+library(multcomp)
+library(vegan)
+library(factoextra)
+library(pca3d)
+library(EnvStats)
+library(car)
+setwd('~/R/Statistics-and-R-programming/data/')
+df <- read_xls('Data_Cortex_Nuclear.xls')
+counts <- sum(complete.cases(df))
+```
+
+Данные взяты из статьи: 10.1371/journal.pone.0119491. Всего в эксперименте было задействовано 72 мыши: 38 контрольных и 34 с трисомией по хромосоме 21 (синдром Дауна). Мыши разбиваются на 8 классов в зависимости от 3х признаков: 
+
+  + Генотип - наличие или отсутствие трисомии
+  + Наличие или остуствие обучения
+  + Введение мышам лекарства мемантина или физраствора.
+  
+Классы наблюдений:
+
+  + c-CS-s: контрольные мыши, стимулированные к обучению, введение физраствора (9 мышей)
+  + c-CS-m: контрольные мыши, стимулированные к обучению, введение мемантина (10 мышей)
+  + c-SC-s: контрольные мыши, не стимулированные к обучению, введение физраствора (9 мышей)
+  + c-SC-m: контрольные мыши, не стимулированные к обучению, введение мемантина (10 мышей)
+  
+  + t-CS-s: мыши с трисомией, стимулированные к обучению, введение физраствора (7 мышей)
+  + t-CS-m: мыши с трисомией, стимулированные к обучению, введение мемантина (9 мышей)
+  + t-SC-s: мыши с трисомией, не стимулированные к обучению, введение физраствора (9 мышей)
+  + t-SC-m: мыши с трисомией, не стимулированные к обучению, введение мемантина (9 мышей)
+   
+Число полных наблюдений = `r counts`. Все наблюдения, содержащие NA, мы удаляем.
+
+```{r}
+df <- df %>% na.omit()
+df$class <- as.factor(df$class)
+```
+
+После предобработки данных, мы наблюдаем следующее распределение семплов по классам:
+
+```{r}
+table(df$class)
+```
+
+Количество семплов в разных классах мало отклоняется от среднего значения 69, что позволяет говорить о сбалансированности классов.
+
+## Дисперсионный анализ
+
+Необходимо было узнать, есть ли различия в уровне продукции BDNF_N в зависимости от класса в эксперименте. Для начала мы можем посмотреть на средние и доверительные интервалы исходных данных.
+
+```{r}
+ggplot(df, aes(class, BDNF_N, color = class)) + stat_summary(fun.data = 'mean_cl_normal')
+```
+
+На графике мы видим сильное отклонение значений в классе c-SC-m от остальных групп.
+
+Для точной оценки различий уровня продукции BDNF_N мы строим линейную модель зависимости BDNF_N от дискретного предиктора class, с помощью которой проводим дисперсионный анализ в ANOVA.
+
+```{r}
+mod_df <- lm(BDNF_N ~ class, data = df)
+df_anova <- anova(mod_df)
+df_anova
+```
+
+Дисперсионный анализ показывает, что уровень экспрессии BDNF_N значимо зависит от генотипа или условий проведения эксперимента (F = 7.304, p_value = 2.18e-08, df1 = 7, df2 = 544). Далее мы проверяем условия применимости нашего анализа.
+
+```{r}
+mod_diag_disp <- fortify(mod_df)
+ggplot(mod_diag_disp, aes(x = 1:nrow(mod_diag_disp), y = .cooksd)) + geom_bar(stat = 'identity') + ggtitle('График расстояний Кука')
+ggplot(mod_diag_disp, aes(x = class, y = .stdresid)) + geom_boxplot() + ggtitle('График остатков от предсказанных значений')
+qqPlot(mod_diag_disp$.stdresid, main = 'Квантильный график остатков')
+```
+
+График расстояний Кука указывает на отсутствие влиятельных наблюдений. На графике остатков от предсказанных значений видно, что дисперсии в группах распределены равномерно. qqPlot даёт в целом нормальное распределение остатков в модели. Всё это говорит о применимости дисперсионного анализа в данном случае.
+
+Чтобы установить, какие именно классы наблюдений по BDNF_N попарно различаются между собой, необходимо провести пост-хок тесты Хьюки .
+
+```{r}
+post_hoch <- glht(mod_df, linfct = mcp(class = 'Tukey'))
+summary(post_hoch)
+```
+
+В пост-хок тестах Хьюки (df = 544) мы видим значимые различия данных в классе c-SC-m с данными в классах c-CS-m (F = -0.0491100, p_value <0.01), c-CS-s (F = -0.0524793, p_value <0.01), c-SC-s (F = 0.0427687, p_value <0.01), t-CS-m (F = 0.0492772, p_value <0.01), t-CS-s (F = -0.0070935, p_value <0.01). Данные различия можно отобразить на графике:
+
+```{r}
+MyData <- data.frame(class = factor(levels(df$class), levels = levels(df$class)))
+MyData <- data.frame(MyData, predict(mod_df, newdata = MyData, interval = 'confidence'))
+
+gg_bars <- ggplot(data = MyData, aes(x = class, y = fit)) + geom_bar(stat = 'identity', aes(fill = class), width = 0.5) + geom_errorbar(aes(ymin = lwr, ymax = upr), width = 0.1)
+gg_bars + ylab(label = 'BDNF_N')
+```
+
+## Построение модели
+
+Следующим шагом была попытка построить многомерную линейную модель, способную предсказать уровень продукции белка ERBB4_N на основании данных о других белках в эксперименте. Самой большой проблемой при построении модели с таким большим количеством предикторов является мультиколлинеарность. Чаще всего в этом случае используют метод главных компонент (PCA), с помощью которого можно объединять все коррелирующие предикторы в главные компоненты. Сейчас мы попробуем построить линейную модель традиционным методом отбора предикторов по коллинеарности и значимости. Сперва построим полную модель.
+
+```{r}
+model_data <- df[, 2:78]
+mod_1 <- lm(ERBB4_N ~ ., model_data)
+summary(mod_1)
+```
+
+Так как все параметры измерялись в одинаковых единицах размерности, мы не будем проводить стандартизацию и сразу перейдем к отбору предикторов по мультиколлинеарности.
+
+```{r}
+#alias(mod_1)
+mod_2 <- update(mod_1, .~. - ARC_N)
+
+vif(mod_2)
+names(vif(mod_2))[which.max(vif(mod_2))]
+mod_3 <- update(mod_2, .~. - NR1_N)
+
+#vif(mod_3)
+names(vif(mod_3))[which.max(vif(mod_3))]
+mod_4 <- update(mod_3, .~. - Bcatenin_N)
+
+#vif(mod_4)
+names(vif(mod_4))[which.max(vif(mod_4))]
+mod_5 <- update(mod_4, .~. - TRKA_N)
+
+#vif(mod_5)
+names(vif(mod_5))[which.max(vif(mod_5))]
+mod_6 <- update(mod_5, .~. - ITSN1_N)
+
+#vif(mod_6)
+names(vif(mod_6))[which.max(vif(mod_6))]
+mod_7 <- update(mod_6, .~. - pERK_N)
+
+#vif(mod_7)
+names(vif(mod_7))[which.max(vif(mod_7))]
+mod_8 <- update(mod_7, .~. - pNR2B_N)
+
+#vif(mod_8)
+names(vif(mod_8))[which.max(vif(mod_8))]
+mod_9 <- update(mod_8, .~. - AcetylH3K9_N)
+
+#vif(mod_9)
+names(vif(mod_9))[which.max(vif(mod_9))]
+mod_10 <- update(mod_9, .~. - ERK_N)
+
+#vif(mod_10)
+names(vif(mod_10))[which.max(vif(mod_10))]
+mod_11 <- update(mod_10, .~. - PKCA_N)
+
+#vif(mod_11)
+names(vif(mod_11))[which.max(vif(mod_11))]
+mod_12 <- update(mod_11, .~. - ELK_N)
+
+#vif(mod_12)
+names(vif(mod_12))[which.max(vif(mod_12))]
+mod_13 <- update(mod_12, .~. - pNR1_N)
+
+#vif(mod_13)
+names(vif(mod_13))[which.max(vif(mod_13))]
+mod_14 <- update(mod_13, .~. - GSK3B_N)
+
+#vif(mod_14)
+names(vif(mod_14))[which.max(vif(mod_14))]
+mod_15 <- update(mod_14, .~. - AMPKA_N)
+
+#vif(mod_15)
+names(vif(mod_15))[which.max(vif(mod_15))]
+mod_16 <- update(mod_15, .~. - pJNK_N)
+
+#vif(mod_16)
+names(vif(mod_16))[which.max(vif(mod_16))]
+mod_17 <- update(mod_16, .~. - NUMB_N)
+
+#vif(mod_17)
+names(vif(mod_17))[which.max(vif(mod_17))]
+mod_18 <- update(mod_17, .~. - pPKCAB_N)
+
+#vif(mod_18)
+names(vif(mod_18))[which.max(vif(mod_18))]
+mod_19 <- update(mod_18, .~. - DYRK1A_N)
+
+#vif(mod_19)
+names(vif(mod_19))[which.max(vif(mod_19))]
+mod_20 <- update(mod_19, .~. - pAKT_N)
+
+#vif(mod_20)
+names(vif(mod_20))[which.max(vif(mod_20))]
+mod_21 <- update(mod_20, .~. - JNK_N)
+
+#vif(mod_21)
+names(vif(mod_21))[which.max(vif(mod_21))]
+mod_22 <- update(mod_21, .~. - RAPTOR_N)
+
+#vif(mod_22)
+names(vif(mod_22))[which.max(vif(mod_22))]
+mod_23 <- update(mod_22, .~. - MTOR_N)
+
+#vif(mod_23)
+names(vif(mod_23))[which.max(vif(mod_23))]
+mod_24 <- update(mod_23, .~. - CaNA_N)
+
+#vif(mod24)
+names(vif(mod_24))[which.max(vif(mod_24))]
+mod_25 <- update(mod_24, .~. - NR2A_N)
+
+#vif(mod_25)
+names(vif(mod_25))[which.max(vif(mod_25))]
+mod_26 <- update(mod_25, .~. - pMEK_N)
+
+#vif(mod_26)
+names(vif(mod_26))[which.max(vif(mod_26))]
+mod_27 <- update(mod_26, .~. - H3MeK4_N)
+
+#vif(mod_27)
+names(vif(mod_27))[which.max(vif(mod_27))]
+mod_28 <- update(mod_27, .~. - pPKCG_N)
+
+#vif(mod_28)
+names(vif(mod_28))[which.max(vif(mod_28))]
+mod_29 <- update(mod_28, .~. - BDNF_N)
+
+#vif(mod_29)
+names(vif(mod_29))[which.max(vif(mod_29))]
+mod_30 <- update(mod_29, .~. - TIAM1_N)
+
+#vif(mod_30)
+names(vif(mod_30))[which.max(vif(mod_30))]
+mod_31 <- update(mod_30, .~. - pMTOR_N)
+
+#vif(mod_31)
+names(vif(mod_31))[which.max(vif(mod_31))]
+mod_32 <- update(mod_31, .~. - pS6_N)
+
+#vif(mod_32)
+names(vif(mod_32))[which.max(vif(mod_32))]
+mod_33 <- update(mod_32, .~. - MEK_N)
+
+#vif(mod_33)
+names(vif(mod_33))[which.max(vif(mod_33))]
+mod_34 <- update(mod_33, .~. - EGR1_N)
+
+#vif(mod_34)
+names(vif(mod_34))[which.max(vif(mod_34))]
+mod_35 <- update(mod_34, .~. - CAMKII_N)
+
+#vif(mod_35)
+names(vif(mod_35))[which.max(vif(mod_35))]
+mod_36 <- update(mod_35, .~. - pCREB_N)
+
+#vif(mod_36)
+names(vif(mod_36))[which.max(vif(mod_36))]
+mod_37 <- update(mod_36, .~. - pNR2A_N)
+
+#vif(mod_37)
+names(vif(mod_37))[which.max(vif(mod_37))]
+mod_38 <- update(mod_37, .~. - NR2B_N)
+
+#vif(mod_38)
+names(vif(mod_38))[which.max(vif(mod_38))]
+mod_39 <- update(mod_38, .~. - CREB_N)
+
+#vif(mod_39)
+names(vif(mod_39))[which.max(vif(mod_39))]
+mod_40 <- update(mod_39, .~. - Ubiquitin_N)
+
+#vif(mod_40)
+names(vif(mod_40))[which.max(vif(mod_40))]
+mod_41 <- update(mod_40, .~. - pRSK_N)
+
+#vif(mod_40)
+names(vif(mod_40))[which.max(vif(mod_40))]
+mod_41 <- update(mod_40, .~. - pRSK_N)
+
+#vif(mod_41)
+names(vif(mod_41))[which.max(vif(mod_41))]
+mod_42 <- update(mod_41, .~. - BAD_N)
+
+#vif(mod_42)
+names(vif(mod_42))[which.max(vif(mod_42))]
+mod_43 <- update(mod_42, .~. - Tau_N)
+
+#vif(mod_43)
+names(vif(mod_43))[which.max(vif(mod_43))]
+mod_44 <- update(mod_43, .~. - pNUMB_N)
+
+#vif(mod_44)
+names(vif(mod_44))[which.max(vif(mod_44))]
+mod_45 <- update(mod_44, .~. - S6_N)
+
+#vif(mod_45)
+names(vif(mod_45))[which.max(vif(mod_45))]
+mod_46 <- update(mod_45, .~. - pBRAF_N)
+
+#vif(mod_46)
+names(vif(mod_46))[which.max(vif(mod_46))]
+mod_47 <- update(mod_46, .~. - pGSK3B_N)
+
+#vif(mod_47)
+names(vif(mod_47))[which.max(vif(mod_47))]
+mod_48 <- update(mod_47, .~. - GluR3_N)
+
+#vif(mod_48)
+names(vif(mod_48))[which.max(vif(mod_48))]
+mod_49 <- update(mod_48, .~. - P70S6_N)
+
+#vif(mod_49)
+names(vif(mod_49))[which.max(vif(mod_49))]
+mod_50 <- update(mod_49, .~. - P38_N)
+
+#vif(mod_50)
+names(vif(mod_50))[which.max(vif(mod_50))]
+mod_51 <- update(mod_50, .~. - nNOS_N)
+
+#vif(mod_51)
+names(vif(mod_51))[which.max(vif(mod_51))]
+mod_52 <- update(mod_51, .~. - IL1B_N)
+
+#vif(mod_52)
+names(vif(mod_52))[which.max(vif(mod_52))]
+mod_53 <- update(mod_52, .~. - AKT_N)
+
+#vif(mod_53)
+a <- names(vif(mod_53))[which.max(vif(mod_53))]
+mod_54 <- update(mod_53, .~. - BCL2_N)
+
+names(vif(mod_54))[which.max(vif(mod_54))]
+mod_55 <- update(mod_54, .~. - BRAF_N)
+
+names(vif(mod_55))[which.max(vif(mod_55))]
+mod_56 <- update(mod_55, .~. - PSD95_N)
+
+#vif(mod_56)
+names(vif(mod_56))[which.max(vif(mod_56))]
+mod_57 <- update(mod_56, .~. - P3525_N)
+
+#vif(mod_57)
+names(vif(mod_57))[which.max(vif(mod_57))]
+mod_58 <- update(mod_57, .~. - SYP_N)
+
+#vif(mod_58)
+names(vif(mod_58))[which.max(vif(mod_58))]
+mod_59 <- update(mod_58, .~. - pCFOS_N)
+
+#vif(mod_59)
+names(vif(mod_59))[which.max(vif(mod_59))]
+mod_60 <- update(mod_59, .~. - BAX_N)
+
+#vif(mod_60)
+names(vif(mod_60))[which.max(vif(mod_60))]
+mod_61 <- update(mod_60, .~. - GluR4_N)
+
+#vif(mod_61)
+names(vif(mod_61))[which.max(vif(mod_61))]
+mod_62 <- update(mod_61, .~. - APP_N)
+
+vif(mod_62)
+names(vif(mod_62))[which.max(vif(mod_62))]
+mod_63 <- update(mod_62, .~. - pGSK3B_Tyr216_N)
+
+vif(mod_63)
+```
+
+Таким быстрым и элегантным способом мы отсеяли 63 предиктора, которые проявляли сильную корреляцию. Оставшиеся предикторы мы отбираем по значимости. 
+
+```{r}
+drop1(mod_63, test = 'F')
+mod_64 <- update(mod_63, .~. - RRP1_N)
+
+drop1(mod_64, test = 'F')
+mod_65 <- update(mod_64, .~. - pELK_N)
+
+drop1(mod_65, test = 'F')
+mod_66 <- update(mod_65, .~. - DSCR1_N)
+
+drop1(mod_66, test = 'F')
+summary(mod_66)
+mod_67 <- update(mod_66, .~. - pCAMKII_N)
+
+summary(mod_67)
+drop1(mod_67, test = 'F')
+mod_68 <- update(mod_67, .~. - pP70S6_N)
+
+summary(mod_68)
+```
+
+Полученная модель имеет вид  ERBB4_N = 3.755e-17 + 1.631e-01 * RSK_N + 9.087e-02 * SOD1_N + 7.028e-02 * CDK5_N + 3.094e-01 * ADARB1_N - 1.330e-01 * GFAP_N + pCASP9_N * 4.622e-01 + 9.644e-02 * SNCA_N + 2.522e-01 * SHH_N + 2.713e-01 * H3AcK18_N. Предикторы в модели mod_68 обуславливают 66.07% вариации уровня экспрессии ERBB4_N, со стандартным отклонением остатков 0.5873 при 542 степенях свободы, F = 117.3 при df1 = 9 и df2 = 542, p-value < 2.2e-16. Теперь необходимо произвести диагностику полученной модели.
+
+```{r}
+mod_diag <- data.frame(fortify(mod_68), model_data[, c(56, 31, 34, 49, 51, 59, 64, 66, 69)])
+gg_resid <- ggplot(data = mod_diag, aes(x = .fitted, y = .stdresid)) + 
+  geom_point() + 
+  geom_hline(yintercept = 0) +
+  geom_smooth(method = "lm") +
+  geom_hline(yintercept = 2, color = "red") +
+  geom_hline(yintercept = -2, color = "red")
+gg_resid
+
+ggplot(mod_diag, aes(x = 1:nrow(mod_diag), y = .cooksd)) + 
+  geom_bar(stat = "identity") + 
+  geom_hline(yintercept = 2, color = "red")
+
+qqPlot(mod_diag$.stdresid)
+
+dwt(mod_diag$.fitted)
+```
+
+Мы видим, что на графике расстояний Кука нет влиятельных наблюдений. График остатков показывает, что они распределены линейно, однако группируются к центру, что указывает на тенденцию к гетероскедастичности. Некоторые остатки лежат за пределами двух сигм. qqPlot указывает на нормальность распределения остатков. p-value Дурбин-Ватсон теста равен `r dwt(mod_diag$.fitted)`, что не позволяет отклонить нулевую гипотезу об отсутствии автокорреляции.
+
+Несмотря на то, что мы получили легитимную модель для предсказания уровня продукции белка ERBB4_N, такой метод является нежелательным из-за ограничений во времени, из-за проблем проверки неучтенных зависимостей от предикторов, удаленных на этапе проверки на мультиколлинеарность и что самое главное, в этой модели мы предсказываем уровень ERBB4_N относительно уровней других белков, полученных в восьми разных случаях.
+
+
+## PCA
+
+Последним заданием было провести PCA на предложенном датасете.
+
+```{r}
+pca <- rda(model_data, scale = TRUE)
+head(summary(pca))
+```
+
+Мы видим, что количество главных компонент совпадает с количеством исследуемых белков, однако процент дисперсии данных, который объясняет каждая компонента, различается, что можно видеть в строке Proportion explained:
+
+```{r}
+eigenvals(pca)
+```
+
+Чем больше главных компонент мы берем в анализ, тем больше процент объясняемой дисперсии стремится к 100%, однако, если мы возьмем всего 3 главные компоненты, мы уже объясним 57% от общей дисперсии. Процент объясняемой дисперсии можно отобразить на графике:
+
+```{r}
+screeplot(pca, type = "lines", bstick = TRUE)
+
+pca_summary <- summary(pca)
+pca_result <- as.data.frame(pca_summary$cont)
+plot_data <- as.data.frame(t(pca_result[c("Proportion Explained"),]))
+plot_data$component <- rownames(plot_data)
+ggplot(plot_data[1:6, ], aes(component, `Proportion Explained`)) + geom_bar(stat = "identity") + theme_bw()
+```
+
+График факторных нагрузок (ниже) отображает направление осей исходных признаков (собственные векторы) относительно осей главных компонент: из этого графика мы можем оценить как соотносятся главные компоненты и исходные признаки (со- , антинаправленно, не зависят друг от друга), а также корреляцию исходных признаков.
+
+```{r}
+biplot(pca, scaling = "species", display = "species")
+```
+
+Наверное, самая интересная часть РСА - это построение графиков ординации. На графике ниже собственные числа показывают дисперсию вдоль собственных векторов. Расстояния между точками (объектами - сигналами об уровне белков в лунках планшета) апроксимируют евклидовы расстояния и отражают сходство между изучаемыми объектами и классами, к которым они относятся. 
+
+```{r}
+pca_base <- prcomp(model_data, scale = TRUE)
+fviz_pca_ind(pca_base,
+             geom.ind = "point", # show points only (nbut not "text")
+             col.ind = df$class, # color by groups
+             palette = "Dark2",
+             addEllipses = TRUE, # Concentration ellipses
+             legend.title = "Taxon"
+             )
+```
+
+Также график ординации можно построить с помощью неметрического многомерного шкалирования (nMDS). При этом мы используем матрицу расстояний Брея-Куртиса и автотрансформацию данных, а оси теперь задаются не главными компонентами, а NMDS. Обычно этот метод применяют при низком показателе качества евклидовой апроксимации - стрессе. В нашем случае он близок к 0,15 (норма), так что оба графика ординации имеют право на существование.
+
+```{r}
+ord<-metaMDS(comm = model_data, distance = "bray",autotransform = F)
+ord_pt <- data.frame(df[, 82], scores(ord, display = "sites"))
+ggplot(ord_pt, aes(NMDS1, NMDS2, color = class))+geom_point()+ggtitle(label = "Ординация nMDS")
+```
+
+Графики можно строить также относительно трёх главных компонент. Для этого мы воспользуемся пакетом pca3d (если не открывается через этот файл, надо выполнить код ниже).
+
+```{r}
+gr <- factor(df$class)
+pca3d(pca_base, group = gr)
+#Альтернативно можно попробовать вызвать скриншот в Rmd следующими командами
+#snapshotPCA3d(file="pca.png")
+```
+  
